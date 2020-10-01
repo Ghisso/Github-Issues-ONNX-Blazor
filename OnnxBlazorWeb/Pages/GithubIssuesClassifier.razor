@@ -1,0 +1,76 @@
+﻿@page "/githubissuesclassifier"
+
+@inject IJSRuntime JSRuntime;
+@inject Microsoft.Extensions.ML.PredictionEnginePool<RobertaGithubIssueEncoded, RobertaGithubIssuesOutput> Pool;
+@inject IMemoryCache Cache;
+
+<h3>GithubIssuesClassifier</h3>
+
+<div class="text-field-container">
+    <MatBlazor.MatTextField @bind-Value="@Issue" Label="Issue" TextArea="true"></MatBlazor.MatTextField>
+</div>
+<div>
+    <MatButton Raised="true" @onclick="@Predict">Predict</MatButton>
+</div>
+<div>
+    <p>@PredictionsText</p>
+</div>
+
+@code
+{
+    protected override void OnParametersSet()
+    {
+        AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+        channel = GrpcChannel.ForAddress("http://localhost:50051");
+        client = new Encoder.EncoderClient(channel);
+        Issue = "AppDomain.SetPrincipalPolicy(PrincipalPolicy.WindowsPrincipal) works only once. Setting the PrincipalPolicy on the current AppDomain to WindowsPrincipal works only for the first thread being started. Any subsequent thread has Thread.CurrentPrincipal evaluated to NULL.";
+    }
+
+    public string PredictionsText
+    {
+        get => predictionsText;
+        set
+        {
+            predictionsText = value;
+            this.StateHasChanged();
+        }
+    }
+
+    public string Issue
+    {
+        get => issue;
+        set
+        {
+            issue = value;
+            this.StateHasChanged();
+        }
+    }
+
+    private GrpcChannel channel;
+    private Encoder.EncoderClient client;
+    private string issue;
+    private string predictionsText;
+    private RobertaGithubIssue text;
+    private RobertaGithubIssueEncoded encoded;
+    private RobertaGithubIssuesOutput output;
+
+    async Task Predict(MouseEventArgs e)
+    {
+        System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
+
+        stopwatch.Start();
+        output = Cache.Get<RobertaGithubIssuesOutput>(Issue);
+        if (output is null)
+        {
+            var reply = await client.EncodeAsync(new Issue() { Text = Issue });
+            encoded = new RobertaGithubIssueEncoded() { input_ids = reply.InputIds.ToArray(), attention_mask = reply.AttentionMask.ToArray() };
+            output = Pool.GetPredictionEngine("github_issues_onnx").Predict(encoded);
+            Cache.Set<RobertaGithubIssuesOutput>(Issue, output, TimeSpan.FromHours(1));
+        }
+        stopwatch.Stop();
+        predictionsText = $"Time taken : {stopwatch.Elapsed.TotalSeconds} <br/>";
+        predictionsText += string.Join(", ", output.predictions);
+    }
+
+
+}
